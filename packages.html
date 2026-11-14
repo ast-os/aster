@@ -37,26 +37,10 @@
                     <div class="l-box">
                         <h2>Packages</h2>
                         <p>
-                            Packages are read from the published index of
+                            Packages are read from the recipes in
                             <a href="https://github.com/ast-os/ast-recipes" target="_blank" rel="noopener">ast-recipes</a>.
                             asterOS is source-based: each package is built from its recipe.
                         </p>
-
-                        <form class="dl-form pkg-filters" id="filters">
-                            <div class="field">
-                                <label for="arch">Architecture</label>
-                                <select id="arch" name="arch">
-                                    <option value="x86_64">x86_64</option>
-                                </select>
-                            </div>
-                            <div class="field">
-                                <label for="channel">Channel</label>
-                                <select id="channel" name="channel">
-                                    <option value="ast">ast (stable)</option>
-                                    <option value="ast-edge">ast-edge</option>
-                                </select>
-                            </div>
-                        </form>
 
                         <div id="pkg-status" class="pkg-status"></div>
                         <div id="pkg-list"></div>
@@ -72,14 +56,19 @@
 
     <script>
     (function () {
-        const CHANNEL_MAP = {
-            "ast":      { repo: "ast-recipes", branch: "repo", path: "x86_64/stable" },
-            "ast-edge": { repo: "ast-recipes", branch: "repo", path: "x86_64/edge" }
-        };
+        const OWNER_REPO = "ast-os/ast-recipes";
+        const BRANCH = "main";
+        const RAW = "https://raw.githubusercontent.com/" + OWNER_REPO + "/" + BRANCH + "/";
+        const BLOB = "https://github.com/" + OWNER_REPO + "/blob/" + BRANCH + "/";
+        const TREE = "https://api.github.com/repos/" + OWNER_REPO + "/git/trees/" + BRANCH + "?recursive=1";
 
         const statusEl = document.getElementById("pkg-status");
         const listEl = document.getElementById("pkg-list");
-        const form = document.getElementById("filters");
+
+        function setStatus(msg, isError) {
+            statusEl.textContent = msg;
+            statusEl.className = "pkg-status" + (isError ? " error" : "");
+        }
 
         function esc(t) {
             return String(t).replace(/[&<>"]/g, function (c) {
@@ -87,148 +76,86 @@
             });
         }
 
-        function setStatus(msg, isError) {
-            statusEl.textContent = msg;
-            statusEl.className = "pkg-status" + (isError ? " error" : "");
-        }
-
-        // Minimal TOML parser for index.toml (tables + simple string/quoted values)
-        function parseIndexToml(text) {
-            const packages = [];
-            let current = null;
-            const lines = text.split(/\r?\n/);
-
-            for (let i = 0; i < lines.length; i++) {
-                let line = lines[i].trim();
-                if (!line || line.startsWith("#")) continue;
-
-                const tableMatch = line.match(/^\[([^\]]+)\]$/);
-                if (tableMatch) {
-                    const key = tableMatch[1].trim();
-                    if (key === "metadata") {
-                        current = null;
-                        continue;
-                    }
-                    // [name."version-rev"] or [name.version]
-                    const m = key.match(/^(.+?)\.\"([^\"]+)\"$/) || key.match(/^(.+?)\.([^\s\]]+)$/);
-                    if (m) {
-                        current = {
-                            name: m[1],
-                            version: m[2],
-                            arch: "",
-                            description: "",
-                            license: "",
-                            binary: "",
-                            recipe: "",
-                            depends: "",
-                            status: ""
-                        };
-                        packages.push(current);
-                    } else {
-                        current = null;
-                    }
-                    continue;
+        // Reads the [package] table of a recipe (simple string and number values)
+        function parseRecipe(text) {
+            const pkg = { name: "", version: "", revision: "", description: "", license: "" };
+            let inPackage = false;
+            text.split(/\r?\n/).forEach(function (raw) {
+                const line = raw.trim();
+                if (!line || line.startsWith("#")) return;
+                const table = line.match(/^\[([^\]]+)\]$/);
+                if (table) {
+                    inPackage = table[1].trim() === "package";
+                    return;
                 }
-
-                if (!current) continue;
-
+                if (!inPackage) return;
                 const kv = line.match(/^(\w+)\s*=\s*(.+)$/);
-                if (!kv) continue;
+                if (!kv || !(kv[1] in pkg)) return;
                 let val = kv[2].trim();
-                if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-                    val = val.slice(1, -1);
+                if (val.startsWith('"') && val.endsWith('"')) {
+                    val = val.slice(1, -1).replace(/\\"/g, '"');
                 }
-                const field = kv[1];
-                if (field in current) current[field] = val;
-            }
-            return packages;
+                pkg[kv[1]] = val;
+            });
+            return pkg;
         }
 
-        function renderPackages(pkgs, baseUrl) {
-            if (!pkgs.length) {
-                listEl.innerHTML = "<p>No packages found in this index.</p>";
-                return;
-            }
-
-            // group by name
-            const byName = {};
-            pkgs.forEach(function (p) {
-                if (!byName[p.name]) byName[p.name] = [];
-                byName[p.name].push(p);
-            });
-
-            const names = Object.keys(byName).sort();
+        function render(pkgs) {
+            pkgs.sort(function (a, b) { return a.name.localeCompare(b.name); });
             let html = '<table class="pkg-table"><thead><tr>' +
                 "<th>Package</th><th>Version</th><th>Description</th><th>License</th><th></th>" +
                 "</tr></thead><tbody>";
-
-            names.forEach(function (name) {
-                byName[name].forEach(function (p, idx) {
-                    const ver = p.version;
-                    const recipe = name + "-" + ver + ".recipe.toml";
-                    const rec = baseUrl + recipe;
-                    html += "<tr>" +
-                        "<td>" + (idx === 0 ? "<strong>" + esc(name) + "</strong>" : "") + "</td>" +
-                        "<td><code>" + esc(ver) + "</code></td>" +
-                        "<td>" + esc(p.description || "—") + "</td>" +
-                        "<td>" + esc(p.license || "—") + "</td>" +
-                        "<td class=\"pkg-actions\">" +
-                            (p.binary ? "<a href=\"" + esc(baseUrl + p.binary) + "\">.ast</a> · " : "") +
-                            "<a href=\"" + esc(rec) + "\">recipe</a>" +
-                        "</td></tr>";
-                });
+            pkgs.forEach(function (p) {
+                const ver = p.version + (p.revision ? "-" + p.revision : "");
+                html += "<tr>" +
+                    "<td><strong>" + esc(p.name) + "</strong></td>" +
+                    "<td><code>" + esc(ver) + "</code></td>" +
+                    "<td>" + esc(p.description || "—") + "</td>" +
+                    "<td>" + esc(p.license || "—") + "</td>" +
+                    '<td class="pkg-actions"><a href="' + esc(BLOB + p.path) + '" target="_blank" rel="noopener">recipe</a></td>' +
+                    "</tr>";
             });
-
-            html += "</tbody></table>";
-            listEl.innerHTML = html;
+            listEl.innerHTML = html + "</tbody></table>";
         }
 
         function load() {
-            const channel = document.getElementById("channel").value;
-            const info = CHANNEL_MAP[channel];
-            if (!info) {
-                setStatus("Failed to gather information.", true);
-                listEl.innerHTML = "";
-                return;
-            }
-
-            const base = "https://raw.githubusercontent.com/ast-os/" +
-                info.repo + "/" + info.branch + "/" + info.path + "/";
-            const indexUrl = base + "index.toml";
-
-            setStatus("Loading " + indexUrl + " …");
-            listEl.innerHTML = "";
-
-            fetch(indexUrl)
+            setStatus("Loading recipes …");
+            fetch(TREE)
                 .then(function (res) {
-                    if (res.status === 404) {
-                        const e = new Error("not published");
-                        e.notPublished = true;
-                        throw e;
-                    }
-                    if (!res.ok) {
-                        throw new Error("HTTP " + res.status);
-                    }
-                    return res.text();
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    return res.json();
                 })
-                .then(function (text) {
-                    const pkgs = parseIndexToml(text);
-                    setStatus(
-                        "Loaded " + pkgs.length + " package version(s) from " +
-                        info.repo + " / " + info.path
-                    );
-                    renderPackages(pkgs, base);
+                .then(function (tree) {
+                    const paths = tree.tree.map(function (e) { return e.path; }).filter(function (p) {
+                        return /^recipes\/[^\/]+\/[^\/]+\.recipe\.toml$/.test(p);
+                    });
+                    return Promise.all(paths.map(function (path) {
+                        return fetch(RAW + path)
+                            .then(function (res) { return res.ok ? res.text() : ""; })
+                            .then(function (text) {
+                                const p = parseRecipe(text);
+                                p.path = path;
+                                if (!p.name) p.name = path.split("/")[1];
+                                return p;
+                            })
+                            .catch(function () { return null; });
+                    }));
                 })
-                .catch(function (e) {
-                    setStatus(e && e.notPublished ? "This channel is not published yet." : "Failed to gather information.", true);
+                .then(function (pkgs) {
+                    pkgs = pkgs.filter(Boolean);
+                    if (!pkgs.length) {
+                        setStatus("No recipes found.", true);
+                        return;
+                    }
+                    setStatus(pkgs.length + " package(s) in " + OWNER_REPO);
+                    render(pkgs);
+                })
+                .catch(function () {
+                    setStatus("Failed to gather information.", true);
                     listEl.innerHTML = "";
                 });
         }
 
-        document.getElementById("arch").addEventListener("change", load);
-        document.getElementById("channel").addEventListener("change", load);
-
-        // initial load
         load();
     })();
     </script>
