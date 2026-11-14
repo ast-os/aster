@@ -42,6 +42,10 @@
                             asterOS is source-based: each package is built from its recipe.
                         </p>
 
+                        <div class="pkg-search">
+                            <input type="search" id="pkg-search" placeholder="Search packages" aria-label="Search packages" autocomplete="off" disabled>
+                        </div>
+
                         <div id="pkg-status" class="pkg-status"></div>
                         <div id="pkg-list"></div>
                     </div>
@@ -100,8 +104,28 @@
             return pkg;
         }
 
+        let all = [];
+        const searchEl = document.getElementById("pkg-search");
+
+        function applySearch() {
+            const q = searchEl.value.trim().toLowerCase();
+            const shown = !q ? all : all.filter(function (p) {
+                return p.name.toLowerCase().indexOf(q) !== -1 ||
+                    p.description.toLowerCase().indexOf(q) !== -1;
+            });
+            if (!shown.length) {
+                setStatus("No packages match \u201c" + searchEl.value.trim() + "\u201d.");
+                listEl.innerHTML = "";
+                return;
+            }
+            setStatus(q ? shown.length + " of " + all.length + " package(s)"
+                        : all.length + " package(s) in " + OWNER_REPO);
+            render(shown);
+        }
+
+        searchEl.addEventListener("input", applySearch);
+
         function render(pkgs) {
-            pkgs.sort(function (a, b) { return a.name.localeCompare(b.name); });
             let html = '<table class="pkg-table"><thead><tr>' +
                 "<th>Package</th><th>Version</th><th>Description</th><th>License</th><th></th>" +
                 "</tr></thead><tbody>";
@@ -147,8 +171,10 @@
                         setStatus("No recipes found.", true);
                         return;
                     }
-                    setStatus(pkgs.length + " package(s) in " + OWNER_REPO);
-                    render(pkgs);
+                    pkgs.sort(function (a, b) { return a.name.localeCompare(b.name); });
+                    all = pkgs;
+                    searchEl.disabled = false;
+                    applySearch();
                 })
                 .catch(function () {
                     setStatus("Failed to gather information.", true);

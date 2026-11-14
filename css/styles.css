@@ -465,3 +465,25 @@ footer {
     opacity: 0.45;
     cursor: not-allowed;
 }
+
+/* Package search */
+.pkg-search {
+    margin: 0.75rem 0;
+    max-width: 280px;
+}
+.pkg-search input {
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    background: var(--bg-soft);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+.pkg-search input:focus {
+    outline: 1px solid #555;
+    outline-offset: 1px;
+}
+.pkg-search input:disabled {
+    opacity: 0.45;
+}
